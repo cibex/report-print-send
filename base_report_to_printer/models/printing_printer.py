@@ -162,6 +162,13 @@ class PrintingPrinter(models.Model):
         fd, file_name = mkstemp()
         if isinstance(content, str):
             content = content.encode()
+        _logger.info(
+            "Writing temporary print job for printer %s report=%s bytes=%s options=%s",
+            self.display_name,
+            report and report.report_name,
+            len(content or b""),
+            print_opts,
+        )
         try:
             os.write(fd, content)
         finally:
@@ -207,16 +214,45 @@ class PrintingPrinter(models.Model):
         connection = self.server_id._open_connection(raise_on_error=True)
         options = self.print_options(report=report, **print_opts)
 
-        _logger.debug(
-            f"Sending job to CUPS printer {self.system_name} on "
-            f"{self.server_id.address} with options {options}"
-        )
-        connection.printFile(self.system_name, file_name, title, options=options)
-        _logger.info(f"Printing job: '{file_name}' on {self.server_id.address}")
         try:
-            os.remove(file_name)
-        except OSError as exc:
-            _logger.warning(f"Unable to remove temporary file {file_name}: {exc}")
+            _logger.info(
+                "Sending file to CUPS printer=%s server=%s:%s title=%s report=%s options=%s file=%s",
+                self.system_name,
+                self.server_id.address,
+                self.server_id.port,
+                title,
+                report and report.report_name,
+                options,
+                file_name,
+            )
+            job_id = connection.printFile(
+                self.system_name, file_name, title, options=options
+            )
+            _logger.info(
+                "CUPS accepted print job printer=%s server=%s:%s job_id=%s file=%s",
+                self.system_name,
+                self.server_id.address,
+                self.server_id.port,
+                job_id,
+                file_name,
+            )
+        except Exception:
+            _logger.exception(
+                "CUPS printFile failed printer=%s server=%s:%s title=%s report=%s options=%s file=%s",
+                self.system_name,
+                self.server_id.address,
+                self.server_id.port,
+                title,
+                report and report.report_name,
+                options,
+                file_name,
+            )
+            raise
+        finally:
+            try:
+                os.remove(file_name)
+            except OSError as exc:
+                _logger.warning(f"Unable to remove temporary file {file_name}: {exc}")
         return True
 
     def set_default(self):

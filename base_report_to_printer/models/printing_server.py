@@ -54,6 +54,13 @@ class PrintingServer(models.Model):
             return password
 
         try:
+            _logger.info(
+                "Opening CUPS connection to %s:%s user=%s encryption_policy=%s",
+                self.address,
+                self.port,
+                self.user or "<default>",
+                self.encryption_policy or "<default>",
+            )
             # Sometimes connecting to printer servers outside of the local network
             # can result in a weird error "cups.IPPError: (1030, 'The printer
             # or class does not exist.')".
@@ -69,7 +76,8 @@ class PrintingServer(models.Model):
                     cups.setPasswordCB(pw_callback)
 
             connection = cups.Connection(host=self.address, port=self.port)
-        except Exception:
+            _logger.debug("Opened CUPS connection to %s:%s", self.address, self.port)
+        except Exception as exc:
             message = _(
                 "Failed to connect to the CUPS server on %(address)s:%(port)s. "
                 "Check that the CUPS server is running and that "
@@ -78,9 +86,13 @@ class PrintingServer(models.Model):
                 "address": self.address,
                 "port": self.port,
             }
-            _logger.warning(message)
+            _logger.exception(
+                "%s Original error: %s",
+                message,
+                exc,
+            )
             if raise_on_error:
-                raise exceptions.UserError(message) from Exception
+                raise exceptions.UserError(message) from exc
 
         return connection
 

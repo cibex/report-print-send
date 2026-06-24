@@ -5,11 +5,14 @@
 # Copyright (C) 2013-2014 Camptocamp (<http://www.camptocamp.com>)
 # Copyright 2024 Tecnativa - Sergio Teruel
 # License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl).
+import logging
 import threading
 from time import time
 
 from odoo import _, api, exceptions, fields, models, registry
 from odoo.tools.safe_eval import safe_eval
+
+_logger = logging.getLogger(__name__)
 
 REPORT_TYPES = {"qweb-pdf": "pdf", "qweb-text": "text"}
 
@@ -58,6 +61,13 @@ class IrActionsReport(models.Model):
         if not report:
             return {}
         result = report.behaviour()
+        _logger.debug(
+            "Resolved print action for report %s: action=%s printer=%s printer_exception=%s",
+            report_name,
+            result.get("action"),
+            result.get("printer") and result["printer"].display_name,
+            result.get("printer_exception", False),
+        )
         serializable_result = {
             "action": result["action"],
             "printer_name": result["printer"].name,
@@ -134,7 +144,20 @@ class IrActionsReport(models.Model):
                     "server-error",
                     "unavailable",
                 ]
+                _logger.debug(
+                    "Printer preflight for report %s succeeded: printer=%s status=%s",
+                    self.report_name,
+                    printer.display_name,
+                    printer.status,
+                )
             except Exception:
+                _logger.exception(
+                    "Printer preflight failed for report %s using printer %s on server %s:%s",
+                    self.report_name,
+                    printer.display_name,
+                    printer.server_id.address,
+                    printer.server_id.port,
+                )
                 printer_exception = True
             if printer_exception and not self.env.context.get("skip_printer_exception"):
                 result["printer_exception"] = True
@@ -158,12 +181,22 @@ class IrActionsReport(models.Model):
             try:
                 return self.print_document(record_ids, data=data)
             except Exception:
+                _logger.exception(
+                    "Client-triggered report printing failed for report %s record_ids=%s",
+                    self.report_name,
+                    record_ids,
+                )
                 return
 
     def print_document_threaded(self, report_id, record_ids, data):
         with registry(self._cr.dbname).cursor() as cr:
             self = self.with_env(self.env(cr=cr))
             report = self.env["ir.actions.report"].browse(report_id)
+            _logger.info(
+                "Starting threaded print for report %s record_ids=%s",
+                report.report_name,
+                record_ids,
+            )
             report.print_document(record_ids, data)
 
     def print_document(self, record_ids, data=None):
@@ -180,6 +213,14 @@ class IrActionsReport(models.Model):
         )(self.report_name, record_ids, data=data)
         behaviour = self.behaviour()
         printer = behaviour.pop("printer", None)
+        _logger.info(
+            "Prepared report %s for direct print: report_type=%s record_ids=%s bytes=%s printer=%s",
+            self.report_name,
+            self.report_type,
+            record_ids,
+            len(document or b""),
+            printer and printer.display_name,
+        )
 
         if not printer:
             raise exceptions.UserError(_("No printer configured to print this report."))
@@ -195,6 +236,12 @@ class IrActionsReport(models.Model):
             title = self.report_name
         behaviour["title"] = title
         behaviour["res_ids"] = record_ids
+        _logger.debug(
+            "Dispatching report %s to printer %s with behaviour=%s",
+            self.report_name,
+            printer.display_name,
+            behaviour,
+        )
         # TODO should we use doc_format instead of report_type
         return printer.print_document(
             self, document, doc_format=self.report_type, **behaviour
@@ -236,6 +283,13 @@ class IrActionsReport(models.Model):
         behaviour = report.behaviour()
         printer = behaviour.pop("printer", None)
         can_print_report = report._can_print_report(behaviour, printer, document)
+        _logger.debug(
+            "Auto-print PDF report %s can_print=%s printer=%s action=%s",
+            report.report_name,
+            can_print_report,
+            printer and printer.display_name,
+            behaviour.get("action"),
+        )
 
         if can_print_report:
             printer.print_document(
@@ -257,6 +311,13 @@ class IrActionsReport(models.Model):
         behaviour = report.behaviour()
         printer = behaviour.pop("printer", None)
         can_print_report = report._can_print_report(behaviour, printer, document)
+        _logger.debug(
+            "Auto-print text report %s can_print=%s printer=%s action=%s",
+            report.report_name,
+            can_print_report,
+            printer and printer.display_name,
+            behaviour.get("action"),
+        )
 
         if can_print_report:
             printer.print_document(

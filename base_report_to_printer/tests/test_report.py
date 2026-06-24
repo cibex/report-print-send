@@ -226,3 +226,20 @@ class TestReport(common.HttpCase):
         ) as print_file:
             self.new_printer().print_document("", "test")
             print_file.assert_called_once()
+
+    def test_print_document_client_action_logs_exception(self):
+        self.report.printing_printer_id = self.new_printer()
+        with (
+            mock.patch(
+                "odoo.addons.base_report_to_printer.models."
+                "ir_actions_report.IrActionsReport.print_document",
+                side_effect=RuntimeError("boom"),
+            ),
+            self.assertLogs(
+                "odoo.addons.base_report_to_printer.models.ir_actions_report",
+                level=logging.ERROR,
+            ) as logs,
+        ):
+            result = self.report.print_document_client_action(self.partners.ids)
+        self.assertIsNone(result)
+        self.assertIn("Client-triggered report printing failed", logs.output[0])
